@@ -12,6 +12,8 @@ namespace Oxide.Plugins
     {
         private const string PermAdmin = "sisyphusboulder.admin";
 
+        [PluginReference] private Plugin SatoshiCoins;
+
         private PluginConfig _config;
         private StoredData _data;
 
@@ -57,6 +59,9 @@ namespace Oxide.Plugins
 
             [JsonProperty("Respawn car if destroyed")]
             public bool RespawnIfDestroyed = true;
+
+            [JsonProperty("Satoshi coins reward per completed climb")]
+            public int CoinReward = 1;
         }
 
         #endregion
@@ -104,6 +109,7 @@ namespace Oxide.Plugins
                 ["NotCursed"] = "{0} не проклят(а).",
                 ["Freed"] = "{0} освобождён(а) от валуна. Пока что.",
                 ["Reset"] = "Валун срывается вниз и катится к подножию... Попытка №{0}.",
+                ["CoinsEarned"] = "+{0} сатоши коинов.",
                 ["Stats"] = "{0}: попыток закатить валун на вершину — {1}. Вершина всё так же далека.",
                 ["Usage"] = "/sisyphus setstart | setsummit | curse <игрок> | free <игрок> | stats [игрок]",
             }, this);
@@ -345,6 +351,14 @@ namespace Oxide.Plugins
             SaveData();
 
             var player = BasePlayer.FindByID(playerId);
+
+            if (_config.CoinReward > 0 && SatoshiCoins != null)
+            {
+                SatoshiCoins.Call("Deposit", playerId, (long)_config.CoinReward);
+                if (player != null)
+                    SendReply(player, Lang("CoinsEarned", player.UserIDString, _config.CoinReward));
+            }
+
             if (player != null)
                 SendReply(player, Lang("Reset", player.UserIDString, count));
         }
