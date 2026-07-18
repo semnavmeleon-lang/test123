@@ -241,14 +241,21 @@ namespace Oxide.Plugins
         {
             if (baseAmount <= 0) return 0;
 
-            var multiplier = 1.0 + _btcUsd24hChange / 100.0;
-            if (multiplier < 0) multiplier = 0;
-
-            var scaled = (long)Math.Round(baseAmount * multiplier, MidpointRounding.AwayFromZero);
+            var scaled = ScaleByRate(baseAmount);
             if (scaled <= 0) return 0;
 
             Deposit(playerId, scaled);
             return scaled;
+        }
+
+        // Same 24h-change scaling as DepositScaled, but a pure calculation (e.g. for shop prices) with no balance change.
+        public long PriceScaled(long baseAmount) => ScaleByRate(baseAmount);
+
+        private long ScaleByRate(long baseAmount)
+        {
+            var multiplier = 1.0 + _btcUsd24hChange / 100.0;
+            if (multiplier < 0) multiplier = 0;
+            return (long)Math.Round(baseAmount * multiplier, MidpointRounding.AwayFromZero);
         }
 
         #endregion
