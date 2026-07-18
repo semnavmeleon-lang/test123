@@ -1,10 +1,14 @@
+using System;
 using System.Collections.Generic;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using Oxide.Core;
+using Oxide.Core.Libraries;
 
 namespace Oxide.Plugins
 {
-    [Info("Satoshi Coins", "semnavmeleon", "1.1.0")]
-    [Description("Standalone currency plugin: Satoshi Coins.")]
+    [Info("Satoshi Coins", "semnavmeleon", "1.2.0")]
+    [Description("Standalone currency plugin: Satoshi Coins, pegged to the live BTC rate.")]
     public class SatoshiCoins : RustPlugin
     {
         private const string PermBalance = "satoshicoins.balance";
@@ -18,7 +22,14 @@ namespace Oxide.Plugins
         private const string PermPayAll = "satoshicoins.payall";
         private const string PermWipe = "satoshicoins.wipe";
 
+        private const long SatoshisPerBtc = 100_000_000L;
+
+        private PluginConfig _config;
         private StoredData _data;
+
+        private double _btcUsd;
+        private double _btcRub;
+        private DateTime _lastRateUpdate = DateTime.MinValue;
 
         private enum AdminOp { Give, Take, Set }
 
@@ -26,6 +37,39 @@ namespace Oxide.Plugins
         {
             public Dictionary<ulong, long> Balances = new Dictionary<ulong, long>();
         }
+
+        private class PluginConfig
+        {
+            [JsonProperty("Price API URL (CoinGecko simple/price, bitcoin vs usd,rub)")]
+            public string PriceApiUrl = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd,rub";
+
+            [JsonProperty("Rate refresh interval (seconds)")]
+            public float RefreshInterval = 300f;
+        }
+
+        #region Config
+
+        protected override void LoadDefaultConfig() => _config = new PluginConfig();
+
+        protected override void LoadConfig()
+        {
+            base.LoadConfig();
+            try
+            {
+                _config = Config.ReadObject<PluginConfig>();
+                if (_config == null) throw new Exception("null config");
+            }
+            catch
+            {
+                PrintWarning("Config is corrupt, loading defaults.");
+                LoadDefaultConfig();
+            }
+            SaveConfig();
+        }
+
+        protected override void SaveConfig() => Config.WriteObject(_config);
+
+        #endregion
 
         #region Hooks
 
@@ -44,8 +88,8 @@ namespace Oxide.Plugins
 
             lang.RegisterMessages(new Dictionary<string, string>
             {
-                ["Balance"] = "У тебя {0} сатоши коинов.",
-                ["BalanceOther"] = "{0}: {1} сатоши коинов.",
+                ["Balance"] = "У тебя {0} сатоши коинов{1}.",
+                ["BalanceOther"] = "{0}: {1} сатоши коинов{2}.",
                 ["InsufficientFunds"] = "Недостаточно сатоши коинов.",
                 ["NoPermission"] = "У тебя нет прав на это.",
                 ["PlayerNotFound"] = "Игрок не найден: {0}",
@@ -56,18 +100,78 @@ namespace Oxide.Plugins
                 ["AllPlayersDone"] = "Готово: применено к игрокам онлайн ({0}).",
                 ["WipeConfirm"] = "Это удалит ВСЕ балансы безвозвратно. Введи /coins wipe confirm для подтверждения.",
                 ["WipeDone"] = "Все балансы сатоши коинов обнулены.",
-                ["Usage"] = "/coins [balance <игрок>] | pay <игрок|*> <сумма> | give <игрок|*> <сумма> | take <игрок|*> <сумма> | set <игрок|*> <сумма> | wipe confirm",
+                ["Rate"] = "Курс BTC: ${0} / {1}₽ (CoinGecko, обновлено {2}).",
+                ["RateUnavailable"] = "Курс BTC ещё не получен, попробуй через минуту.",
+                ["Usage"] = "/coins [balance <игрок>] | pay <игрок|*> <сумма> | give <игрок|*> <сумма> | take <игрок|*> <сумма> | set <игрок|*> <сумма> | wipe confirm | rate",
             }, this);
         }
 
         private void OnServerInitialized()
         {
             _data = Interface.Oxide.DataFileSystem.ReadObject<StoredData>(Name) ?? new StoredData();
+
+            FetchBtcRate();
+            timer.Every(_config.RefreshInterval, FetchBtcRate);
         }
 
         private void Unload() => SaveData();
 
         private void SaveData() => Interface.Oxide.DataFileSystem.WriteObject(Name, _data);
+
+        #endregion
+
+        #region BTC rate
+
+        private void FetchBtcRate()
+        {
+            if (string.IsNullOrEmpty(_config.PriceApiUrl)) return;
+
+            webrequest.Enqueue(_config.PriceApiUrl, null, (code, response) =>
+            {
+                if (code != 200 || string.IsNullOrEmpty(response))
+                {
+                    PrintWarning($"Не удалось получить курс BTC (HTTP {code}). Использую последний известный курс.");
+                    return;
+                }
+
+                try
+                {
+                    var bitcoin = JObject.Parse(response)["bitcoin"];
+                    if (bitcoin == null) return;
+
+                    var usd = bitcoin["usd"]?.Value<double>() ?? 0;
+                    var rub = bitcoin["rub"]?.Value<double>() ?? 0;
+
+                    if (usd > 0) _btcUsd = usd;
+                    if (rub > 0) _btcRub = rub;
+                    _lastRateUpdate = DateTime.UtcNow;
+                }
+                catch (Exception ex)
+                {
+                    PrintWarning($"Ошибка разбора курса BTC: {ex.Message}");
+                }
+            }, this, RequestMethod.GET, null, 10f);
+        }
+
+        public double BtcPriceUsd() => _btcUsd;
+
+        public double BtcPriceRub() => _btcRub;
+
+        public double ValueUsd(long satoshis) => _btcUsd <= 0 ? 0 : satoshis * (_btcUsd / SatoshisPerBtc);
+
+        public double ValueRub(long satoshis) => _btcRub <= 0 ? 0 : satoshis * (_btcRub / SatoshisPerBtc);
+
+        private string FiatSuffix(long satoshis)
+        {
+            if (_btcUsd <= 0) return "";
+
+            var usd = ValueUsd(satoshis);
+            var rub = ValueRub(satoshis);
+
+            return rub > 0
+                ? $" (≈ ${usd:0.####} / ≈ {rub:0.##}₽)"
+                : $" (≈ ${usd:0.####})";
+        }
 
         #endregion
 
@@ -136,7 +240,8 @@ namespace Oxide.Plugins
         {
             if (args.Length == 0)
             {
-                SendReply(player, Lang("Balance", player.UserIDString, Balance(player.userID)));
+                var amount = Balance(player.userID);
+                SendReply(player, Lang("Balance", player.UserIDString, amount, FiatSuffix(amount)));
                 return;
             }
 
@@ -166,6 +271,10 @@ namespace Oxide.Plugins
                     CmdWipe(player, args);
                     break;
 
+                case "rate":
+                    CmdRate(player);
+                    break;
+
                 default:
                     SendReply(player, Lang("Usage", player.UserIDString));
                     break;
@@ -176,7 +285,8 @@ namespace Oxide.Plugins
         {
             if (args.Length < 2)
             {
-                SendReply(player, Lang("Balance", player.UserIDString, Balance(player.userID)));
+                var own = Balance(player.userID);
+                SendReply(player, Lang("Balance", player.UserIDString, own, FiatSuffix(own)));
                 return;
             }
 
@@ -193,7 +303,8 @@ namespace Oxide.Plugins
                 return;
             }
 
-            SendReply(player, Lang("BalanceOther", player.UserIDString, target.displayName, Balance(target.userID)));
+            var targetBalance = Balance(target.userID);
+            SendReply(player, Lang("BalanceOther", player.UserIDString, target.displayName, targetBalance, FiatSuffix(targetBalance)));
         }
 
         private void CmdPay(BasePlayer player, string[] args)
@@ -296,7 +407,8 @@ namespace Oxide.Plugins
             }
 
             ApplyAdminOp(op, single.userID, amount);
-            SendReply(player, Lang("BalanceOther", player.UserIDString, single.displayName, Balance(single.userID)));
+            var newBalance = Balance(single.userID);
+            SendReply(player, Lang("BalanceOther", player.UserIDString, single.displayName, newBalance, FiatSuffix(newBalance)));
         }
 
         private void ApplyAdminOp(AdminOp op, ulong targetId, long amount)
@@ -331,6 +443,17 @@ namespace Oxide.Plugins
 
             WipeAll();
             SendReply(player, Lang("WipeDone", player.UserIDString));
+        }
+
+        private void CmdRate(BasePlayer player)
+        {
+            if (_btcUsd <= 0)
+            {
+                SendReply(player, Lang("RateUnavailable", player.UserIDString));
+                return;
+            }
+
+            SendReply(player, Lang("Rate", player.UserIDString, _btcUsd.ToString("N2"), _btcRub.ToString("N0"), _lastRateUpdate.ToString("HH:mm:ss")));
         }
 
         #endregion
