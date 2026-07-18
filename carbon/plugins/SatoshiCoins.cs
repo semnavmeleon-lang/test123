@@ -3,13 +3,24 @@ using Oxide.Core;
 
 namespace Oxide.Plugins
 {
-    [Info("Satoshi Coins", "semnavmeleon", "1.0.0")]
+    [Info("Satoshi Coins", "semnavmeleon", "1.1.0")]
     [Description("Standalone currency plugin: Satoshi Coins.")]
     public class SatoshiCoins : RustPlugin
     {
-        private const string PermAdmin = "satoshicoins.admin";
+        private const string PermBalance = "satoshicoins.balance";
+        private const string PermGive = "satoshicoins.give";
+        private const string PermGiveAll = "satoshicoins.giveall";
+        private const string PermTake = "satoshicoins.take";
+        private const string PermTakeAll = "satoshicoins.takeall";
+        private const string PermSet = "satoshicoins.set";
+        private const string PermSetAll = "satoshicoins.setall";
+        private const string PermPay = "satoshicoins.pay";
+        private const string PermPayAll = "satoshicoins.payall";
+        private const string PermWipe = "satoshicoins.wipe";
 
         private StoredData _data;
+
+        private enum AdminOp { Give, Take, Set }
 
         private class StoredData
         {
@@ -20,7 +31,16 @@ namespace Oxide.Plugins
 
         private void Init()
         {
-            permission.RegisterPermission(PermAdmin, this);
+            permission.RegisterPermission(PermBalance, this);
+            permission.RegisterPermission(PermGive, this);
+            permission.RegisterPermission(PermGiveAll, this);
+            permission.RegisterPermission(PermTake, this);
+            permission.RegisterPermission(PermTakeAll, this);
+            permission.RegisterPermission(PermSet, this);
+            permission.RegisterPermission(PermSetAll, this);
+            permission.RegisterPermission(PermPay, this);
+            permission.RegisterPermission(PermPayAll, this);
+            permission.RegisterPermission(PermWipe, this);
 
             lang.RegisterMessages(new Dictionary<string, string>
             {
@@ -29,10 +49,14 @@ namespace Oxide.Plugins
                 ["InsufficientFunds"] = "Недостаточно сатоши коинов.",
                 ["NoPermission"] = "У тебя нет прав на это.",
                 ["PlayerNotFound"] = "Игрок не найден: {0}",
-                ["PayUsage"] = "/coins pay <игрок> <сумма>",
+                ["PayUsage"] = "/coins pay <игрок|*> <сумма>",
                 ["PaySuccess"] = "Ты перевёл {0} сатоши коинов игроку {1}.",
                 ["PayReceived"] = "{0} перевёл(а) тебе {1} сатоши коинов.",
                 ["InvalidAmount"] = "Некорректная сумма.",
+                ["AllPlayersDone"] = "Готово: применено к игрокам онлайн ({0}).",
+                ["WipeConfirm"] = "Это удалит ВСЕ балансы безвозвратно. Введи /coins wipe confirm для подтверждения.",
+                ["WipeDone"] = "Все балансы сатоши коинов обнулены.",
+                ["Usage"] = "/coins [balance <игрок>] | pay <игрок|*> <сумма> | give <игрок|*> <сумма> | take <игрок|*> <сумма> | set <игрок|*> <сумма> | wipe confirm",
             }, this);
         }
 
@@ -59,8 +83,10 @@ namespace Oxide.Plugins
         {
             if (amount <= 0) return false;
             _data.Balances.TryGetValue(playerId, out var balance);
-            _data.Balances[playerId] = balance + amount;
+            balance += amount;
+            _data.Balances[playerId] = balance;
             SaveData();
+            Interface.Oxide.CallHook("OnSatoshiCoinsDeposit", playerId, amount, balance);
             return true;
         }
 
@@ -69,9 +95,36 @@ namespace Oxide.Plugins
             if (amount <= 0) return false;
             _data.Balances.TryGetValue(playerId, out var balance);
             if (balance < amount) return false;
-            _data.Balances[playerId] = balance - amount;
+            balance -= amount;
+            _data.Balances[playerId] = balance;
             SaveData();
+            Interface.Oxide.CallHook("OnSatoshiCoinsWithdraw", playerId, amount, balance);
             return true;
+        }
+
+        public bool SetBalance(ulong playerId, long amount)
+        {
+            if (amount < 0) return false;
+            _data.Balances[playerId] = amount;
+            SaveData();
+            Interface.Oxide.CallHook("OnSatoshiCoinsSet", playerId, amount);
+            return true;
+        }
+
+        public bool Transfer(ulong fromId, ulong toId, long amount)
+        {
+            if (amount <= 0) return false;
+            if (!Withdraw(fromId, amount)) return false;
+            Deposit(toId, amount);
+            Interface.Oxide.CallHook("OnSatoshiCoinsTransfer", fromId, toId, amount);
+            return true;
+        }
+
+        public void WipeAll()
+        {
+            _data.Balances.Clear();
+            SaveData();
+            Interface.Oxide.CallHook("OnSatoshiCoinsWipe");
         }
 
         #endregion
@@ -89,28 +142,58 @@ namespace Oxide.Plugins
 
             switch (args[0].ToLower())
             {
+                case "balance":
+                    CmdBalance(player, args);
+                    break;
+
                 case "pay":
                     CmdPay(player, args);
                     break;
 
                 case "give":
-                    CmdGive(player, args, true);
+                    CmdAdminOp(player, args, AdminOp.Give);
                     break;
 
                 case "take":
-                    CmdGive(player, args, false);
+                    CmdAdminOp(player, args, AdminOp.Take);
                     break;
 
-                case "balance":
-                    var target = args.Length > 1 ? BasePlayer.Find(args[1]) : player;
-                    if (target == null)
-                    {
-                        SendReply(player, Lang("PlayerNotFound", player.UserIDString, args[1]));
-                        return;
-                    }
-                    SendReply(player, Lang("BalanceOther", player.UserIDString, target.displayName, Balance(target.userID)));
+                case "set":
+                    CmdAdminOp(player, args, AdminOp.Set);
+                    break;
+
+                case "wipe":
+                    CmdWipe(player, args);
+                    break;
+
+                default:
+                    SendReply(player, Lang("Usage", player.UserIDString));
                     break;
             }
+        }
+
+        private void CmdBalance(BasePlayer player, string[] args)
+        {
+            if (args.Length < 2)
+            {
+                SendReply(player, Lang("Balance", player.UserIDString, Balance(player.userID)));
+                return;
+            }
+
+            if (!permission.UserHasPermission(player.UserIDString, PermBalance))
+            {
+                SendReply(player, Lang("NoPermission", player.UserIDString));
+                return;
+            }
+
+            var target = BasePlayer.Find(args[1]);
+            if (target == null)
+            {
+                SendReply(player, Lang("PlayerNotFound", player.UserIDString, args[1]));
+                return;
+            }
+
+            SendReply(player, Lang("BalanceOther", player.UserIDString, target.displayName, Balance(target.userID)));
         }
 
         private void CmdPay(BasePlayer player, string[] args)
@@ -121,52 +204,133 @@ namespace Oxide.Plugins
                 return;
             }
 
-            var target = BasePlayer.Find(args[1]);
-            if (target == null)
-            {
-                SendReply(player, Lang("PlayerNotFound", player.UserIDString, args[1]));
-                return;
-            }
+            var wildcard = args[1] == "*";
 
-            if (!Withdraw(player.userID, amount))
-            {
-                SendReply(player, Lang("InsufficientFunds", player.UserIDString));
-                return;
-            }
-
-            Deposit(target.userID, amount);
-
-            SendReply(player, Lang("PaySuccess", player.UserIDString, amount, target.displayName));
-            SendReply(target, Lang("PayReceived", target.UserIDString, player.displayName, amount));
-        }
-
-        private void CmdGive(BasePlayer player, string[] args, bool give)
-        {
-            if (!permission.UserHasPermission(player.UserIDString, PermAdmin))
+            if (!permission.UserHasPermission(player.UserIDString, wildcard ? PermPayAll : PermPay))
             {
                 SendReply(player, Lang("NoPermission", player.UserIDString));
                 return;
             }
 
-            if (args.Length < 3 || !long.TryParse(args[2], out var amount) || amount <= 0)
+            if (wildcard)
             {
-                SendReply(player, Lang("InvalidAmount", player.UserIDString));
+                var count = 0;
+                foreach (var target in BasePlayer.activePlayerList)
+                {
+                    if (target.userID == player.userID) continue;
+                    if (Transfer(player.userID, target.userID, amount))
+                        count++;
+                }
+                SendReply(player, Lang("AllPlayersDone", player.UserIDString, count));
                 return;
             }
 
-            var target = BasePlayer.Find(args[1]);
-            if (target == null)
+            var single = BasePlayer.Find(args[1]);
+            if (single == null)
             {
                 SendReply(player, Lang("PlayerNotFound", player.UserIDString, args[1]));
                 return;
             }
 
-            if (give)
-                Deposit(target.userID, amount);
-            else
-                Withdraw(target.userID, amount);
+            if (!Transfer(player.userID, single.userID, amount))
+            {
+                SendReply(player, Lang("InsufficientFunds", player.UserIDString));
+                return;
+            }
 
-            SendReply(player, Lang("BalanceOther", player.UserIDString, target.displayName, Balance(target.userID)));
+            SendReply(player, Lang("PaySuccess", player.UserIDString, amount, single.displayName));
+            SendReply(single, Lang("PayReceived", single.UserIDString, player.displayName, amount));
+        }
+
+        private void CmdAdminOp(BasePlayer player, string[] args, AdminOp op)
+        {
+            if (args.Length < 3 || !long.TryParse(args[2], out var amount) || amount < 0)
+            {
+                SendReply(player, Lang("InvalidAmount", player.UserIDString));
+                return;
+            }
+
+            var wildcard = args[1] == "*";
+            string permSingle;
+            string permAll;
+
+            switch (op)
+            {
+                case AdminOp.Give:
+                    permSingle = PermGive;
+                    permAll = PermGiveAll;
+                    break;
+                case AdminOp.Take:
+                    permSingle = PermTake;
+                    permAll = PermTakeAll;
+                    break;
+                default:
+                    permSingle = PermSet;
+                    permAll = PermSetAll;
+                    break;
+            }
+
+            if (!permission.UserHasPermission(player.UserIDString, wildcard ? permAll : permSingle))
+            {
+                SendReply(player, Lang("NoPermission", player.UserIDString));
+                return;
+            }
+
+            if (wildcard)
+            {
+                var count = 0;
+                foreach (var target in BasePlayer.activePlayerList)
+                {
+                    ApplyAdminOp(op, target.userID, amount);
+                    count++;
+                }
+                SendReply(player, Lang("AllPlayersDone", player.UserIDString, count));
+                return;
+            }
+
+            var single = BasePlayer.Find(args[1]);
+            if (single == null)
+            {
+                SendReply(player, Lang("PlayerNotFound", player.UserIDString, args[1]));
+                return;
+            }
+
+            ApplyAdminOp(op, single.userID, amount);
+            SendReply(player, Lang("BalanceOther", player.UserIDString, single.displayName, Balance(single.userID)));
+        }
+
+        private void ApplyAdminOp(AdminOp op, ulong targetId, long amount)
+        {
+            switch (op)
+            {
+                case AdminOp.Give:
+                    Deposit(targetId, amount);
+                    break;
+                case AdminOp.Take:
+                    Withdraw(targetId, amount);
+                    break;
+                case AdminOp.Set:
+                    SetBalance(targetId, amount);
+                    break;
+            }
+        }
+
+        private void CmdWipe(BasePlayer player, string[] args)
+        {
+            if (!permission.UserHasPermission(player.UserIDString, PermWipe))
+            {
+                SendReply(player, Lang("NoPermission", player.UserIDString));
+                return;
+            }
+
+            if (args.Length < 2 || args[1].ToLower() != "confirm")
+            {
+                SendReply(player, Lang("WipeConfirm", player.UserIDString));
+                return;
+            }
+
+            WipeAll();
+            SendReply(player, Lang("WipeDone", player.UserIDString));
         }
 
         #endregion
