@@ -109,7 +109,7 @@ namespace Oxide.Plugins
                 ["NotCursed"] = "{0} не проклят(а).",
                 ["Freed"] = "{0} освобождён(а) от валуна. Пока что.",
                 ["Reset"] = "Валун срывается вниз и катится к подножию... Попытка №{0}.",
-                ["CoinsEarned"] = "+{0} сатоши коинов.",
+                ["CoinsEarned"] = "+{0} сатоши коинов (курс BTC {1:+0.##;-0.##;0}% за 24ч).",
                 ["Stats"] = "{0}: попыток закатить валун на вершину — {1}. Вершина всё так же далека.",
                 ["Usage"] = "/sisyphus setstart | setsummit | curse <игрок> | free <игрок> | stats [игрок]",
             }, this);
@@ -354,9 +354,15 @@ namespace Oxide.Plugins
 
             if (_config.CoinReward > 0 && SatoshiCoins != null)
             {
-                SatoshiCoins.Call("Deposit", playerId, (long)_config.CoinReward);
-                if (player != null)
-                    SendReply(player, Lang("CoinsEarned", player.UserIDString, _config.CoinReward));
+                var scaledResult = SatoshiCoins.Call("DepositScaled", playerId, (long)_config.CoinReward);
+                var rewardGiven = scaledResult != null ? Convert.ToInt64(scaledResult) : 0L;
+
+                if (rewardGiven > 0 && player != null)
+                {
+                    var changeResult = SatoshiCoins.Call("BtcChange24h");
+                    var change = changeResult != null ? Convert.ToDouble(changeResult) : 0.0;
+                    SendReply(player, Lang("CoinsEarned", player.UserIDString, rewardGiven, change));
+                }
             }
 
             if (player != null)

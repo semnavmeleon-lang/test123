@@ -29,6 +29,7 @@ namespace Oxide.Plugins
 
         private double _btcUsd;
         private double _btcRub;
+        private double _btcUsd24hChange;
         private DateTime _lastRateUpdate = DateTime.MinValue;
 
         private enum AdminOp { Give, Take, Set }
@@ -40,8 +41,8 @@ namespace Oxide.Plugins
 
         private class PluginConfig
         {
-            [JsonProperty("Price API URL (CoinGecko simple/price, bitcoin vs usd,rub)")]
-            public string PriceApiUrl = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd,rub";
+            [JsonProperty("Price API URL (CoinGecko simple/price, bitcoin vs usd,rub, with 24h change)")]
+            public string PriceApiUrl = "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd,rub&include_24hr_change=true";
 
             [JsonProperty("Rate refresh interval (seconds)")]
             public float RefreshInterval = 300f;
@@ -100,7 +101,7 @@ namespace Oxide.Plugins
                 ["AllPlayersDone"] = "Готово: применено к игрокам онлайн ({0}).",
                 ["WipeConfirm"] = "Это удалит ВСЕ балансы безвозвратно. Введи /coins wipe confirm для подтверждения.",
                 ["WipeDone"] = "Все балансы сатоши коинов обнулены.",
-                ["Rate"] = "Курс BTC: ${0} / {1}₽ (CoinGecko, обновлено {2}).",
+                ["Rate"] = "Курс BTC: ${0} / {1}₽, за 24ч {2:+0.##;-0.##;0}% (CoinGecko, обновлено {3}).",
                 ["RateUnavailable"] = "Курс BTC ещё не получен, попробуй через минуту.",
                 ["Usage"] = "/coins [balance <игрок>] | pay <игрок|*> <сумма> | give <игрок|*> <сумма> | take <игрок|*> <сумма> | set <игрок|*> <сумма> | wipe confirm | rate",
             }, this);
@@ -141,9 +142,11 @@ namespace Oxide.Plugins
 
                     var usd = bitcoin["usd"]?.Value<double>() ?? 0;
                     var rub = bitcoin["rub"]?.Value<double>() ?? 0;
+                    var usd24hChange = bitcoin["usd_24h_change"]?.Value<double>();
 
                     if (usd > 0) _btcUsd = usd;
                     if (rub > 0) _btcRub = rub;
+                    if (usd24hChange.HasValue) _btcUsd24hChange = usd24hChange.Value;
                     _lastRateUpdate = DateTime.UtcNow;
                 }
                 catch (Exception ex)
@@ -160,6 +163,8 @@ namespace Oxide.Plugins
         public double ValueUsd(long satoshis) => _btcUsd <= 0 ? 0 : satoshis * (_btcUsd / SatoshisPerBtc);
 
         public double ValueRub(long satoshis) => _btcRub <= 0 ? 0 : satoshis * (_btcRub / SatoshisPerBtc);
+
+        public double BtcChange24h() => _btcUsd24hChange;
 
         private string FiatSuffix(long satoshis)
         {
@@ -229,6 +234,21 @@ namespace Oxide.Plugins
             _data.Balances.Clear();
             SaveData();
             Interface.Oxide.CallHook("OnSatoshiCoinsWipe");
+        }
+
+        // Scales baseAmount by BTC's live 24h % change before depositing; returns the amount actually deposited.
+        public long DepositScaled(ulong playerId, long baseAmount)
+        {
+            if (baseAmount <= 0) return 0;
+
+            var multiplier = 1.0 + _btcUsd24hChange / 100.0;
+            if (multiplier < 0) multiplier = 0;
+
+            var scaled = (long)Math.Round(baseAmount * multiplier, MidpointRounding.AwayFromZero);
+            if (scaled <= 0) return 0;
+
+            Deposit(playerId, scaled);
+            return scaled;
         }
 
         #endregion
@@ -453,7 +473,7 @@ namespace Oxide.Plugins
                 return;
             }
 
-            SendReply(player, Lang("Rate", player.UserIDString, _btcUsd.ToString("N2"), _btcRub.ToString("N0"), _lastRateUpdate.ToString("HH:mm:ss")));
+            SendReply(player, Lang("Rate", player.UserIDString, _btcUsd.ToString("N2"), _btcRub.ToString("N0"), _btcUsd24hChange, _lastRateUpdate.ToString("HH:mm:ss")));
         }
 
         #endregion
