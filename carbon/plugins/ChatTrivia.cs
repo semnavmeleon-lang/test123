@@ -99,7 +99,7 @@ new Question { Category = "Философия", Answer = new List<string> { "б�
                 {
                     "Какой философ считал, что вещи существуют только пока их кто-то воспринимает — отсюда и вопрос про дерево, падающее без свидетелей?",
                     "Философский вопрос: назови автора идеи \"существовать значит быть воспринимаемым\".",
-                    "Викторина: чьё имя стоит за классическим \"дерево падает в пустом лесу\" — назови философа.",
+                    "Викторина: чьё имя стоит за классическим \"звук падающего дерева в лесу\" — назови философа.",
                 }},
                 
 new Question { Category = "Философия", Answer = new List<string> { "кант", "kant" }, Variants = new List<string>
@@ -511,7 +511,7 @@ new Question { Category = "Финансы", Difficulty = "Сложный", Answe
                 new Question { Category = "Машины", Difficulty = "Лёгкий", Answer = new List<string> { "lexus f" }, Variants = new List<string> { "Как называется спортивное подразделение Lexus, аналог AMG у Mercedes?", "Викторина: назови спортивное подразделение Lexus." }},
                 new Question { Category = "Машины", Difficulty = "Лёгкий", Answer = new List<string> { "ux" }, Variants = new List<string> { "Как называется самый компактный кроссовер Lexus, младше NX?", "Вопрос: назови самый маленький кроссовер Lexus." }},
                 new Question { Category = "Машины", Difficulty = "Лёгкий", Answer = new List<string> { "lx" }, Variants = new List<string> { "Как называется топовый внедорожник Lexus, построенный на платформе Land Cruiser?", "Викторина: назови топовый внедорожник Lexus на платформе Land Cruiser." }},
-                new Question { Category = "Машины", Difficulty = "Лёгкий", Answer = new List<string> { "es" }, Variants = new List<string> { "Как называется входной, самый доступный седан в линейке Lexus?", "Вопрос: назови начальный седан Lexus." }},
+                new Question { Category = "Машины", Difficulty = "Лёгкий", Answer = new List<string> { "is" }, Variants = new List<string> { "Как называется входной, самый доступный седан в линейке Lexus?", "Вопрос: назови начальный седан Lexus." }},
 
                 // Машины (Lexus) -- средний
                 new Question { Category = "Машины", Difficulty = "Средний", Answer = new List<string> { "hybrid synergy drive" }, Variants = new List<string> { "Как называется гибридная технология Toyota/Lexus, впервые массово внедрённая в конце 1990-х?", "Викторина: назови раннюю гибридную технологию Toyota/Lexus." }},
